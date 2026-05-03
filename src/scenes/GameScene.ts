@@ -18,6 +18,7 @@ import {
   FALL_DAMAGE_THRESHOLD,
   FALL_DAMAGE_FACTOR,
   LAVA_DAMAGE_PER_SEC,
+  DRILL_INTENT_HOLD,
 } from '../config';
 import { TileType, World } from '../game/world';
 import { generateWorld } from '../game/generator';
@@ -58,10 +59,15 @@ export class GameScene extends Phaser.Scene {
   private drillTarget: { col: number; row: number; dir: Direction; type: TileType } | null = null;
   private drillProgress = 0;
   private currentDrillTime = 0;
+  private drillStartX = 0;
+  private drillStartY = 0;
 
   private gameOver = false;
   private wasGrounded = false;
   private prevYVelocity = 0;
+  private heldDown = 0;
+  private heldLeft = 0;
+  private heldRight = 0;
 
   private hudGraphics!: Phaser.GameObjects.Graphics;
   private fuelLabel!: Phaser.GameObjects.Text;
@@ -99,9 +105,14 @@ export class GameScene extends Phaser.Scene {
     this.drillTarget = null;
     this.drillProgress = 0;
     this.currentDrillTime = 0;
+    this.drillStartX = 0;
+    this.drillStartY = 0;
     this.gameOver = false;
     this.wasGrounded = false;
     this.prevYVelocity = 0;
+    this.heldDown = 0;
+    this.heldLeft = 0;
+    this.heldRight = 0;
     this.inventoryLines = new Map();
     this.shopActionTexts = [];
     this.shopActions = [];
@@ -180,42 +191,56 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    const c = this.cursors;
-    const left = c.left.isDown;
-    const right = c.right.isDown;
-    const up = c.up.isDown;
-    const down = c.down.isDown;
+    const c0 = this.cursors;
+    this.heldDown = c0.down.isDown ? this.heldDown + dt : 0;
+    this.heldLeft = c0.left.isDown ? this.heldLeft + dt : 0;
+    this.heldRight = c0.right.isDown ? this.heldRight + dt : 0;
 
-    const horizSpeed = HORIZ_SPEED * this.player.engineMultiplier;
-    const thrust = THRUST_ACCEL * this.player.engineMultiplier;
-    body.setMaxVelocity(horizSpeed, MAX_FALL_SPEED);
+    const drilling = this.drillTarget !== null;
 
-    const fuelEmpty = this.player.fuel <= 0;
-
-    if (left && !right) {
-      body.setAccelerationX(0);
-      body.setVelocityX(-horizSpeed);
-    } else if (right && !left) {
-      body.setAccelerationX(0);
-      body.setVelocityX(horizSpeed);
-    }
-
-    if (up && !fuelEmpty) {
-      body.setAccelerationY(-thrust);
-      this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_THRUST * dt);
+    if (drilling) {
+      this.advanceDrill(dt);
     } else {
-      body.setAccelerationY(0);
+      const c = this.cursors;
+      const left = c.left.isDown;
+      const right = c.right.isDown;
+      const up = c.up.isDown;
+      const down = c.down.isDown;
+
+      const horizSpeed = HORIZ_SPEED * this.player.engineMultiplier;
+      const thrust = THRUST_ACCEL * this.player.engineMultiplier;
+      body.setMaxVelocity(horizSpeed, MAX_FALL_SPEED);
+
+      const fuelEmpty = this.player.fuel <= 0;
+
+      if (left && !right) {
+        body.setAccelerationX(0);
+        body.setVelocityX(-horizSpeed);
+      } else if (right && !left) {
+        body.setAccelerationX(0);
+        body.setVelocityX(horizSpeed);
+      }
+
+      if (up && !fuelEmpty) {
+        body.setAccelerationY(-thrust);
+        this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_THRUST * dt);
+      } else {
+        body.setAccelerationY(0);
+      }
+
+      this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_IDLE * dt);
+
+      this.handleFallDamage(body);
+      this.tryStartDrill({ left, right, down });
+      this.handleShopInput();
     }
 
-    this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_IDLE * dt);
-
-    this.handleDrilling(dt, { left, right, down });
-    this.handleShopInput();
-    this.handleFallDamage(body);
     this.handleLavaDamage(body, dt);
 
     if (this.player.isDead()) {
-      this.triggerGameOver();
+      this.triggerGameOver('GAME OVER');
+    } else if (this.player.fuel <= 0 && this.pod.y > SURFACE_ROW * TILE_SIZE) {
+      this.triggerGameOver('OUT OF FUEL');
     }
 
     this.updateHud();
@@ -252,10 +277,18 @@ export class GameScene extends Phaser.Scene {
     return false;
   }
 
-  private triggerGameOver(): void {
+  private triggerGameOver(reason: string): void {
     if (this.gameOver) return;
     this.gameOver = true;
+    if (this.drillTarget !== null) {
+      const body = this.pod.body as Phaser.Physics.Arcade.Body;
+      body.enable = true;
+      this.drillTarget = null;
+      this.drillProgress = 0;
+      this.currentDrillTime = 0;
+    }
     this.gameOverGraphics.setVisible(true);
+    this.gameOverTitle.setText(reason);
     this.gameOverTitle.setVisible(true);
     this.gameOverSubtitle.setText(`final cash: $${this.player.cash}`);
     this.gameOverSubtitle.setVisible(true);
@@ -277,68 +310,114 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private handleDrilling(
-    dt: number,
-    input: { left: boolean; right: boolean; down: boolean },
-  ): void {
+  private tryStartDrill(input: { left: boolean; right: boolean; down: boolean }): void {
+    if (this.drillTarget !== null) return;
+    if (this.player.fuel <= 0) return;
+
     const body = this.pod.body as Phaser.Physics.Arcade.Body;
+    const target = this.findDrillTarget(body, input);
+    if (!target) return;
+
+    const held =
+      target.dir === 'down'
+        ? this.heldDown
+        : target.dir === 'left'
+          ? this.heldLeft
+          : this.heldRight;
+    if (held < DRILL_INTENT_HOLD) return;
+
+    this.drillTarget = target;
+    this.drillProgress = 0;
+    this.currentDrillTime =
+      TILE_META[target.type].drillTime / (1 + 0.2 * this.player.drillLevel);
+    this.drillStartX = this.pod.x;
+    this.drillStartY = this.pod.y;
+
+    body.enable = false;
+  }
+
+  private isGrounded(body: Phaser.Physics.Arcade.Body): boolean {
+    const TOUCH = 2;
+    const col = Math.floor(this.pod.x / TILE_SIZE);
+    const row = Math.floor((body.bottom + TOUCH) / TILE_SIZE);
+    return this.world.isSolid(col, row);
+  }
+
+  private findDrillTarget(
+    body: Phaser.Physics.Arcade.Body,
+    input: { left: boolean; right: boolean; down: boolean },
+  ): { col: number; row: number; dir: Direction; type: TileType } | null {
+    if (!this.isGrounded(body)) return null;
     const TOUCH = 2;
 
-    let target: { col: number; row: number; dir: Direction; type: TileType } | null = null;
-
-    const tryTarget = (col: number, row: number, dir: Direction) => {
+    const tryDir = (col: number, row: number, dir: Direction) => {
       const type = this.world.getTile(col, row);
-      if (type === TileType.EMPTY) return;
-      if (!isDrillable(type, this.player.drillLevel)) return;
-      if (TILE_META[type].value > 0 && this.player.inventory.isFull()) return;
-      target = { col, row, dir, type };
+      if (type === TileType.EMPTY) return null;
+      if (!isDrillable(type, this.player.drillLevel)) return null;
+      if (TILE_META[type].value > 0 && this.player.inventory.isFull()) return null;
+      return { col, row, dir, type };
     };
 
     if (input.down) {
       const col = Math.floor(this.pod.x / TILE_SIZE);
       const row = Math.floor((body.bottom + TOUCH) / TILE_SIZE);
-      tryTarget(col, row, 'down');
+      const t = tryDir(col, row, 'down');
+      if (t) return t;
     }
-    if (!target && input.left) {
+    if (input.left) {
       const col = Math.floor((body.left - TOUCH) / TILE_SIZE);
       const row = Math.floor(this.pod.y / TILE_SIZE);
-      tryTarget(col, row, 'left');
+      const t = tryDir(col, row, 'left');
+      if (t) return t;
     }
-    if (!target && input.right) {
+    if (input.right) {
       const col = Math.floor((body.right + TOUCH) / TILE_SIZE);
       const row = Math.floor(this.pod.y / TILE_SIZE);
-      tryTarget(col, row, 'right');
+      const t = tryDir(col, row, 'right');
+      if (t) return t;
     }
+    return null;
+  }
 
-    if (!target) {
-      this.drillTarget = null;
-      this.drillProgress = 0;
-      this.currentDrillTime = 0;
-      return;
-    }
-
-    const t: { col: number; row: number; dir: Direction; type: TileType } = target;
-    const same =
-      this.drillTarget && this.drillTarget.col === t.col && this.drillTarget.row === t.row;
-    if (!same) {
-      this.drillTarget = t;
-      this.drillProgress = 0;
-      this.currentDrillTime =
-        TILE_META[t.type].drillTime / (1 + 0.2 * this.player.drillLevel);
-    }
+  private advanceDrill(dt: number): void {
+    const t = this.drillTarget;
+    if (!t) return;
 
     if (this.player.fuel <= 0) return;
 
     this.drillProgress += dt;
+    const targetX = t.col * TILE_SIZE + TILE_SIZE / 2;
+    const targetY = t.row * TILE_SIZE + TILE_SIZE / 2;
+    const ratio = Math.min(1, this.drillProgress / this.currentDrillTime);
+    this.pod.setPosition(
+      this.drillStartX + (targetX - this.drillStartX) * ratio,
+      this.drillStartY + (targetY - this.drillStartY) * ratio,
+    );
+
     if (this.drillProgress >= this.currentDrillTime) {
-      if (TILE_META[t.type].value > 0) this.player.inventory.tryAdd(t.type);
-      this.world.setTile(t.col, t.row, TileType.EMPTY);
-      this.tileLayer.removeTileAt(t.col, t.row);
-      this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_DRILL);
-      this.drillProgress = 0;
-      this.drillTarget = null;
-      this.currentDrillTime = 0;
+      this.completeDrill(targetX, targetY);
     }
+  }
+
+  private completeDrill(targetX: number, targetY: number): void {
+    const t = this.drillTarget;
+    if (!t) return;
+
+    if (TILE_META[t.type].value > 0) this.player.inventory.tryAdd(t.type);
+    this.world.setTile(t.col, t.row, TileType.EMPTY);
+    this.tileLayer.removeTileAt(t.col, t.row);
+    this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_DRILL);
+
+    this.pod.setPosition(targetX, targetY);
+    const body = this.pod.body as Phaser.Physics.Arcade.Body;
+    body.reset(targetX, targetY);
+    body.enable = true;
+
+    this.drillTarget = null;
+    this.drillProgress = 0;
+    this.currentDrillTime = 0;
+    this.prevYVelocity = 0;
+    this.wasGrounded = false;
   }
 
   private buildTileData(): number[][] {
@@ -398,7 +477,7 @@ export class GameScene extends Phaser.Scene {
           if (cost === 0) return { text: '2 REFUEL  (full)', affordable: false, maxed: false };
           return {
             text: `2 REFUEL    $${cost}`,
-            affordable: this.player.cash >= cost,
+            affordable: this.player.cash > 0,
             maxed: false,
           };
         },
@@ -413,7 +492,7 @@ export class GameScene extends Phaser.Scene {
           if (cost === 0) return { text: '3 REPAIR  (ok)', affordable: false, maxed: false };
           return {
             text: `3 REPAIR    $${cost}`,
-            affordable: this.player.cash >= cost,
+            affordable: this.player.cash > 0,
             maxed: false,
           };
         },

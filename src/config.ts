@@ -21,3 +21,5 @@ export const WORLD_SEED = 1337;
 export const FALL_DAMAGE_THRESHOLD = 350;
 export const FALL_DAMAGE_FACTOR = 0.18;
 export const LAVA_DAMAGE_PER_SEC = 35;
+
+export const DRILL_INTENT_HOLD = 0.36;

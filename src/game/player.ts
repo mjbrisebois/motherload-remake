@@ -7,7 +7,7 @@ import {
   effectAt,
   maxLevel,
 } from './upgrades';
-import { refuelCost, repairCost } from './economy';
+import { REFUEL_COST_PER_UNIT, REPAIR_COST_PER_UNIT, refuelCost, repairCost } from './economy';
 
 export class PlayerState {
   cash: number;
@@ -58,9 +58,11 @@ export class PlayerState {
   refuel(): boolean {
     const cost = this.refuelCost();
     if (cost <= 0) return false;
-    if (this.cash < cost) return false;
-    this.cash -= cost;
-    this.fuel = this.maxFuel;
+    if (this.cash <= 0) return false;
+    const spent = Math.min(this.cash, cost);
+    const fuelAdded = spent / REFUEL_COST_PER_UNIT;
+    this.cash -= spent;
+    this.fuel = Math.min(this.maxFuel, this.fuel + fuelAdded);
     return true;
   }
 
@@ -71,9 +73,11 @@ export class PlayerState {
   repair(): boolean {
     const cost = this.repairCost();
     if (cost <= 0) return false;
-    if (this.cash < cost) return false;
-    this.cash -= cost;
-    this.hull = this.maxHull;
+    if (this.cash <= 0) return false;
+    const spent = Math.min(this.cash, cost);
+    const hullAdded = spent / REPAIR_COST_PER_UNIT;
+    this.cash -= spent;
+    this.hull = Math.min(this.maxHull, this.hull + hullAdded);
     return true;
   }
 

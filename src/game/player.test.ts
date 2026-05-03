@@ -33,7 +33,7 @@ describe('PlayerState', () => {
     expect(p.inventory.total()).toBe(0);
   });
 
-  it('refuel only succeeds with enough cash and partial fuel', () => {
+  it('refuel fails when full or broke, fully fills with enough cash', () => {
     const p = new PlayerState(0);
     expect(p.refuel()).toBe(false); // already full
     p.fuel = 0;
@@ -41,9 +41,20 @@ describe('PlayerState', () => {
     p.cash = 10000;
     expect(p.refuel()).toBe(true);
     expect(p.fuel).toBe(p.maxFuel);
+    expect(p.cash).toBeLessThan(10000);
   });
 
-  it('repair only succeeds when damaged with enough cash', () => {
+  it('refuel partially when cash is insufficient', () => {
+    const p = new PlayerState(0);
+    p.fuel = 0;
+    p.cash = 10;
+    expect(p.refuel()).toBe(true);
+    expect(p.cash).toBe(0);
+    expect(p.fuel).toBeGreaterThan(0);
+    expect(p.fuel).toBeLessThan(p.maxFuel);
+  });
+
+  it('repair fails when undamaged or broke, fully fills with enough cash', () => {
     const p = new PlayerState(0);
     expect(p.repair()).toBe(false);
     p.hull = 0;
@@ -51,6 +62,17 @@ describe('PlayerState', () => {
     p.cash = 10000;
     expect(p.repair()).toBe(true);
     expect(p.hull).toBe(p.maxHull);
+    expect(p.cash).toBeLessThan(10000);
+  });
+
+  it('repair partially when cash is insufficient', () => {
+    const p = new PlayerState(0);
+    p.hull = 0;
+    p.cash = 10;
+    expect(p.repair()).toBe(true);
+    expect(p.cash).toBe(0);
+    expect(p.hull).toBeGreaterThan(0);
+    expect(p.hull).toBeLessThan(p.maxHull);
   });
 
   it('buyUpgrade fails when broke and succeeds with cash', () => {
