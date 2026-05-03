@@ -15,10 +15,12 @@ import {
   FUEL_BURN_DRILL,
   WORLD_SEED,
   DRILL_LEVEL,
+  CARGO_CAPACITY,
 } from '../config';
 import { TileType, World } from '../game/world';
 import { generateWorld } from '../game/generator';
 import { TILE_META, RENDERED_TILE_TYPES, isDrillable, type TileMeta } from '../game/tiles';
+import { Inventory } from '../game/inventory';
 
 const TILESET_KEY = 'tiles';
 const POD_KEY = 'pod';
@@ -39,11 +41,19 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
   private fuel = MAX_FUEL;
+  private inventory = new Inventory(CARGO_CAPACITY);
   private drillTarget: { col: number; row: number; dir: Direction; type: TileType } | null = null;
   private drillProgress = 0;
   private currentDrillTime = 0;
 
-  private debugText!: Phaser.GameObjects.Text;
+  private hudGraphics!: Phaser.GameObjects.Graphics;
+  private fuelLabel!: Phaser.GameObjects.Text;
+  private cargoLabel!: Phaser.GameObjects.Text;
+  private depthLabel!: Phaser.GameObjects.Text;
+  private valueLabel!: Phaser.GameObjects.Text;
+  private drillingLabel!: Phaser.GameObjects.Text;
+  private inventoryTitle!: Phaser.GameObjects.Text;
+  private inventoryLines: Map<TileType, Phaser.GameObjects.Text> = new Map();
 
   constructor() {
     super({ key: 'GameScene' });
@@ -96,16 +106,7 @@ export class GameScene extends Phaser.Scene {
 
     this.cursors = this.input.keyboard!.createCursorKeys();
 
-    this.debugText = this.add
-      .text(12, 12, '', {
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#ffffff',
-        backgroundColor: '#00000088',
-        padding: { x: 6, y: 4 },
-      })
-      .setScrollFactor(0)
-      .setDepth(1000);
+    this.createHud();
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -138,7 +139,7 @@ export class GameScene extends Phaser.Scene {
 
     this.handleDrilling(dt, { left, right, down });
 
-    this.updateDebugText();
+    this.updateHud();
   }
 
   private handleDrilling(
@@ -152,9 +153,10 @@ export class GameScene extends Phaser.Scene {
 
     const tryTarget = (col: number, row: number, dir: Direction) => {
       const type = this.world.getTile(col, row);
-      if (type !== TileType.EMPTY && isDrillable(type, DRILL_LEVEL)) {
-        target = { col, row, dir, type };
-      }
+      if (type === TileType.EMPTY) return;
+      if (!isDrillable(type, DRILL_LEVEL)) return;
+      if (TILE_META[type].value > 0 && this.inventory.isFull()) return;
+      target = { col, row, dir, type };
     };
 
     if (input.down) {
@@ -193,6 +195,7 @@ export class GameScene extends Phaser.Scene {
 
     this.drillProgress += dt;
     if (this.drillProgress >= this.currentDrillTime) {
+      if (TILE_META[t.type].value > 0) this.inventory.tryAdd(t.type);
       this.world.setTile(t.col, t.row, TileType.EMPTY);
       this.tileLayer.removeTileAt(t.col, t.row);
       this.fuel = Math.max(0, this.fuel - FUEL_BURN_DRILL);
@@ -214,21 +217,138 @@ export class GameScene extends Phaser.Scene {
     return result;
   }
 
-  private updateDebugText(): void {
+  private createHud(): void {
+    const labelStyle = {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      color: '#e8e8e8',
+    } as const;
+    const titleStyle = {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#a0a0a0',
+    } as const;
+
+    this.hudGraphics = this.add.graphics().setScrollFactor(0).setDepth(1000);
+
+    this.add.text(20, 16, 'FUEL', titleStyle).setScrollFactor(0).setDepth(1001);
+    this.fuelLabel = this.add
+      .text(180, 16, '', labelStyle)
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    this.add.text(20, 38, 'CARGO', titleStyle).setScrollFactor(0).setDepth(1001);
+    this.cargoLabel = this.add
+      .text(180, 38, '', labelStyle)
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    this.depthLabel = this.add
+      .text(20, 64, '', labelStyle)
+      .setScrollFactor(0)
+      .setDepth(1001);
+    this.valueLabel = this.add
+      .text(180, 64, '', labelStyle)
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    this.drillingLabel = this.add
+      .text(20, 84, '', labelStyle)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    const invX = 1280 - 200;
+    this.inventoryTitle = this.add
+      .text(invX + 12, 12, 'INVENTORY', titleStyle)
+      .setScrollFactor(0)
+      .setDepth(1001);
+    let lineY = 32;
+    for (const type of RENDERED_TILE_TYPES) {
+      if (TILE_META[type].value <= 0) continue;
+      const meta = TILE_META[type];
+      const colorHex = '#' + meta.baseColor.toString(16).padStart(6, '0');
+      const accentHex =
+        meta.accentColor !== null
+          ? '#' + meta.accentColor.toString(16).padStart(6, '0')
+          : colorHex;
+      const line = this.add
+        .text(invX + 12, lineY, '', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: accentHex,
+        })
+        .setScrollFactor(0)
+        .setDepth(1001)
+        .setVisible(false);
+      this.inventoryLines.set(type, line);
+      lineY += 18;
+    }
+  }
+
+  private updateHud(): void {
+    const fuelRatio = this.fuel / MAX_FUEL;
+    const cargoRatio = this.inventory.total() / this.inventory.capacity;
+    const fuelColor = fuelRatio < 0.2 ? 0xff5555 : fuelRatio < 0.5 ? 0xf5b342 : 0x55cc55;
+    const cargoColor = this.inventory.isFull() ? 0xff5555 : 0x6db8ff;
+
+    this.hudGraphics.clear();
+    this.hudGraphics.fillStyle(0x000000, 0.55);
+    this.hudGraphics.fillRoundedRect(8, 8, 200, 100, 6);
+    this.drawHudBar(20, 30, 160, 6, fuelRatio, fuelColor);
+    this.drawHudBar(20, 52, 160, 6, cargoRatio, cargoColor);
+
+    const fuelPct = Math.round(fuelRatio * 100);
+    this.fuelLabel.setText(`${fuelPct}%`);
+    this.cargoLabel.setText(`${this.inventory.total()}/${this.inventory.capacity}`);
+
     const depth = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
-    const fuelPct = Math.round((this.fuel / MAX_FUEL) * 100);
-    const drillPct =
-      this.drillTarget && this.currentDrillTime > 0
-        ? Math.round((this.drillProgress / this.currentDrillTime) * 100)
-        : 0;
-    const drillingName = this.drillTarget ? TILE_META[this.drillTarget.type].name : '—';
-    this.debugText.setText(
-      [
-        `fuel: ${fuelPct}%`,
-        `depth: ${depth}m`,
-        `drilling: ${drillingName} (${drillPct}%)`,
-      ].join('  |  '),
-    );
+    this.depthLabel.setText(`DEPTH ${depth}m`);
+    this.valueLabel.setText(`$${this.inventory.totalValue()}`);
+
+    if (this.drillTarget && this.currentDrillTime > 0) {
+      const pct = Math.round((this.drillProgress / this.currentDrillTime) * 100);
+      const name = TILE_META[this.drillTarget.type].name;
+      this.drillingLabel.setText(`drilling ${name} ${pct}%`);
+    } else if (this.inventory.isFull()) {
+      this.drillingLabel.setText('CARGO FULL');
+    } else {
+      this.drillingLabel.setText('');
+    }
+
+    const entries = this.inventory.entries();
+    this.inventoryTitle.setVisible(entries.length > 0);
+    for (const line of this.inventoryLines.values()) line.setVisible(false);
+    if (entries.length > 0) {
+      this.hudGraphics.fillStyle(0x000000, 0.55);
+      this.hudGraphics.fillRoundedRect(1280 - 200, 8, 192, 28 + 18 * entries.length, 6);
+      let lineY = 32;
+      for (const [type, count] of entries) {
+        const line = this.inventoryLines.get(type);
+        if (!line) continue;
+        line.setY(lineY);
+        line.setText(`${TILE_META[type].name.padEnd(9)} ${count}`);
+        line.setVisible(true);
+        lineY += 18;
+      }
+    }
+  }
+
+  private drawHudBar(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    ratio: number,
+    fillColor: number,
+  ): void {
+    this.hudGraphics.fillStyle(0x222222, 1);
+    this.hudGraphics.fillRect(x, y, w, h);
+    const clamped = Math.max(0, Math.min(1, ratio));
+    this.hudGraphics.fillStyle(fillColor, 1);
+    this.hudGraphics.fillRect(x, y, w * clamped, h);
   }
 
   private generatePlaceholderTextures(): void {

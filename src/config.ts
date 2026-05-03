@@ -19,3 +19,4 @@ export const FUEL_BURN_DRILL = 0.3;
 
 export const WORLD_SEED = 1337;
 export const DRILL_LEVEL = 0;
+export const CARGO_CAPACITY = 15;
