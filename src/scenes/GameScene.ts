@@ -9,18 +9,23 @@ import {
   GRAVITY,
   MAX_FALL_SPEED,
   HORIZ_DRAG,
-  MAX_FUEL,
   FUEL_BURN_IDLE,
   FUEL_BURN_THRUST,
   FUEL_BURN_DRILL,
   WORLD_SEED,
-  DRILL_LEVEL,
-  CARGO_CAPACITY,
+  GAME_WIDTH,
+  GAME_HEIGHT,
 } from '../config';
 import { TileType, World } from '../game/world';
 import { generateWorld } from '../game/generator';
 import { TILE_META, RENDERED_TILE_TYPES, isDrillable, type TileMeta } from '../game/tiles';
-import { Inventory } from '../game/inventory';
+import { PlayerState } from '../game/player';
+import {
+  UPGRADE_KINDS_ORDERED,
+  UPGRADE_TRACKS,
+  UpgradeKind,
+  effectAt,
+} from '../game/upgrades';
 
 const TILESET_KEY = 'tiles';
 const POD_KEY = 'pod';
@@ -34,14 +39,19 @@ function shiftColor(rgb: number, delta: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
+interface ShopAction {
+  key: string;
+  buildLabel: () => { text: string; affordable: boolean; maxed: boolean };
+  apply: () => void;
+}
+
 export class GameScene extends Phaser.Scene {
   private world!: World;
   private pod!: Phaser.Physics.Arcade.Sprite;
   private tileLayer!: Phaser.Tilemaps.TilemapLayer;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
-  private fuel = MAX_FUEL;
-  private inventory = new Inventory(CARGO_CAPACITY);
+  private player = new PlayerState();
   private drillTarget: { col: number; row: number; dir: Direction; type: TileType } | null = null;
   private drillProgress = 0;
   private currentDrillTime = 0;
@@ -54,6 +64,13 @@ export class GameScene extends Phaser.Scene {
   private drillingLabel!: Phaser.GameObjects.Text;
   private inventoryTitle!: Phaser.GameObjects.Text;
   private inventoryLines: Map<TileType, Phaser.GameObjects.Text> = new Map();
+
+  private shopGraphics!: Phaser.GameObjects.Graphics;
+  private shopTitle!: Phaser.GameObjects.Text;
+  private shopHint!: Phaser.GameObjects.Text;
+  private shopActionTexts: Phaser.GameObjects.Text[] = [];
+  private shopActions: ShopAction[] = [];
+  private hotkeys!: Phaser.Input.Keyboard.Key[];
 
   constructor() {
     super({ key: 'GameScene' });
@@ -107,6 +124,20 @@ export class GameScene extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
 
     this.createHud();
+    this.buildShopActions();
+    this.createShopUi();
+
+    const kc = Phaser.Input.Keyboard.KeyCodes;
+    this.hotkeys = [
+      this.input.keyboard!.addKey(kc.ONE),
+      this.input.keyboard!.addKey(kc.TWO),
+      this.input.keyboard!.addKey(kc.THREE),
+      this.input.keyboard!.addKey(kc.FOUR),
+      this.input.keyboard!.addKey(kc.FIVE),
+      this.input.keyboard!.addKey(kc.SIX),
+      this.input.keyboard!.addKey(kc.SEVEN),
+      this.input.keyboard!.addKey(kc.EIGHT),
+    ];
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -118,28 +149,49 @@ export class GameScene extends Phaser.Scene {
     const up = c.up.isDown;
     const down = c.down.isDown;
 
-    const fuelEmpty = this.fuel <= 0;
+    const horizSpeed = HORIZ_SPEED * this.player.engineMultiplier;
+    const thrust = THRUST_ACCEL * this.player.engineMultiplier;
+    body.setMaxVelocity(horizSpeed, MAX_FALL_SPEED);
+
+    const fuelEmpty = this.player.fuel <= 0;
 
     if (left && !right) {
       body.setAccelerationX(0);
-      body.setVelocityX(-HORIZ_SPEED);
+      body.setVelocityX(-horizSpeed);
     } else if (right && !left) {
       body.setAccelerationX(0);
-      body.setVelocityX(HORIZ_SPEED);
+      body.setVelocityX(horizSpeed);
     }
 
     if (up && !fuelEmpty) {
-      body.setAccelerationY(-THRUST_ACCEL);
-      this.fuel = Math.max(0, this.fuel - FUEL_BURN_THRUST * dt);
+      body.setAccelerationY(-thrust);
+      this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_THRUST * dt);
     } else {
       body.setAccelerationY(0);
     }
 
-    this.fuel = Math.max(0, this.fuel - FUEL_BURN_IDLE * dt);
+    this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_IDLE * dt);
 
     this.handleDrilling(dt, { left, right, down });
+    this.handleShopInput();
 
     this.updateHud();
+    this.updateShopUi();
+  }
+
+  private isAtSurface(): boolean {
+    return this.pod.y < SURFACE_ROW * TILE_SIZE;
+  }
+
+  private handleShopInput(): void {
+    if (!this.isAtSurface()) return;
+    for (let i = 0; i < this.shopActions.length; i++) {
+      const key = this.hotkeys[i];
+      const action = this.shopActions[i];
+      if (key && action && Phaser.Input.Keyboard.JustDown(key)) {
+        action.apply();
+      }
+    }
   }
 
   private handleDrilling(
@@ -154,8 +206,8 @@ export class GameScene extends Phaser.Scene {
     const tryTarget = (col: number, row: number, dir: Direction) => {
       const type = this.world.getTile(col, row);
       if (type === TileType.EMPTY) return;
-      if (!isDrillable(type, DRILL_LEVEL)) return;
-      if (TILE_META[type].value > 0 && this.inventory.isFull()) return;
+      if (!isDrillable(type, this.player.drillLevel)) return;
+      if (TILE_META[type].value > 0 && this.player.inventory.isFull()) return;
       target = { col, row, dir, type };
     };
 
@@ -188,17 +240,18 @@ export class GameScene extends Phaser.Scene {
     if (!same) {
       this.drillTarget = t;
       this.drillProgress = 0;
-      this.currentDrillTime = TILE_META[t.type].drillTime;
+      this.currentDrillTime =
+        TILE_META[t.type].drillTime / (1 + 0.2 * this.player.drillLevel);
     }
 
-    if (this.fuel <= 0) return;
+    if (this.player.fuel <= 0) return;
 
     this.drillProgress += dt;
     if (this.drillProgress >= this.currentDrillTime) {
-      if (TILE_META[t.type].value > 0) this.inventory.tryAdd(t.type);
+      if (TILE_META[t.type].value > 0) this.player.inventory.tryAdd(t.type);
       this.world.setTile(t.col, t.row, TileType.EMPTY);
       this.tileLayer.removeTileAt(t.col, t.row);
-      this.fuel = Math.max(0, this.fuel - FUEL_BURN_DRILL);
+      this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_DRILL);
       this.drillProgress = 0;
       this.drillTarget = null;
       this.currentDrillTime = 0;
@@ -215,6 +268,80 @@ export class GameScene extends Phaser.Scene {
       result.push(row);
     }
     return result;
+  }
+
+  private buildShopActions(): void {
+    const upgradeAction = (i: number, kind: UpgradeKind): ShopAction => ({
+      key: String(i + 1),
+      buildLabel: () => {
+        const track = UPGRADE_TRACKS[kind];
+        const lvl = this.player.upgradeLevel(kind);
+        const cost = this.player.upgradeCost(kind);
+        if (cost === null) {
+          return { text: `${i + 1} ${track.name}  MAXED`, affordable: false, maxed: true };
+        }
+        const next = effectAt(track, lvl + 1);
+        const nextStr = Number.isInteger(next) ? `${next}` : next.toFixed(2);
+        return {
+          text: `${i + 1} ${track.name} L${lvl}->${lvl + 1} ${nextStr}${track.unit} $${cost}`,
+          affordable: this.player.cash >= cost,
+          maxed: false,
+        };
+      },
+      apply: () => {
+        this.player.buyUpgrade(kind);
+      },
+    });
+
+    this.shopActions = [
+      {
+        key: '1',
+        buildLabel: () => {
+          const v = this.player.inventory.totalValue();
+          return {
+            text: `1 SELL ALL  $${v}`,
+            affordable: v > 0,
+            maxed: false,
+          };
+        },
+        apply: () => {
+          this.player.sellAll();
+        },
+      },
+      {
+        key: '2',
+        buildLabel: () => {
+          const cost = this.player.refuelCost();
+          if (cost === 0) return { text: '2 REFUEL  (full)', affordable: false, maxed: false };
+          return {
+            text: `2 REFUEL    $${cost}`,
+            affordable: this.player.cash >= cost,
+            maxed: false,
+          };
+        },
+        apply: () => {
+          this.player.refuel();
+        },
+      },
+      {
+        key: '3',
+        buildLabel: () => {
+          const cost = this.player.repairCost();
+          if (cost === 0) return { text: '3 REPAIR  (ok)', affordable: false, maxed: false };
+          return {
+            text: `3 REPAIR    $${cost}`,
+            affordable: this.player.cash >= cost,
+            maxed: false,
+          };
+        },
+        apply: () => {
+          this.player.repair();
+        },
+      },
+    ];
+    UPGRADE_KINDS_ORDERED.forEach((kind, idx) => {
+      this.shopActions.push(upgradeAction(3 + idx, kind));
+    });
   }
 
   private createHud(): void {
@@ -245,22 +372,16 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1001);
 
-    this.depthLabel = this.add
-      .text(20, 64, '', labelStyle)
-      .setScrollFactor(0)
-      .setDepth(1001);
+    this.depthLabel = this.add.text(20, 64, '', labelStyle).setScrollFactor(0).setDepth(1001);
     this.valueLabel = this.add
       .text(180, 64, '', labelStyle)
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(1001);
 
-    this.drillingLabel = this.add
-      .text(20, 84, '', labelStyle)
-      .setScrollFactor(0)
-      .setDepth(1001);
+    this.drillingLabel = this.add.text(20, 84, '', labelStyle).setScrollFactor(0).setDepth(1001);
 
-    const invX = 1280 - 200;
+    const invX = GAME_WIDTH - 200;
     this.inventoryTitle = this.add
       .text(invX + 12, 12, 'INVENTORY', titleStyle)
       .setScrollFactor(0)
@@ -288,11 +409,90 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private createShopUi(): void {
+    const titleStyle = {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      color: '#ffd866',
+    } as const;
+    const lineStyle = {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      color: '#e8e8e8',
+    } as const;
+
+    this.shopGraphics = this.add.graphics().setScrollFactor(0).setDepth(1000);
+
+    const panelX = 16;
+    const panelY = GAME_HEIGHT - 150;
+
+    this.shopTitle = this.add
+      .text(panelX + 16, panelY + 10, '', titleStyle)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    this.shopHint = this.add
+      .text(GAME_WIDTH - 16 - panelX, panelY + 10, 'press a number to act', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#888',
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    const cols = 3;
+    const colWidth = (GAME_WIDTH - 32 - 32) / cols;
+    for (let i = 0; i < this.shopActions.length; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = panelX + 20 + col * colWidth;
+      const y = panelY + 38 + row * 26;
+      const t = this.add
+        .text(x, y, '', lineStyle)
+        .setScrollFactor(0)
+        .setDepth(1001);
+      this.shopActionTexts.push(t);
+    }
+  }
+
+  private updateShopUi(): void {
+    const visible = this.isAtSurface();
+    this.shopGraphics.clear();
+    this.shopGraphics.setVisible(visible);
+    this.shopTitle.setVisible(visible);
+    this.shopHint.setVisible(visible);
+    for (const t of this.shopActionTexts) t.setVisible(visible);
+
+    if (!visible) return;
+
+    const panelX = 16;
+    const panelY = GAME_HEIGHT - 150;
+    const panelW = GAME_WIDTH - 32;
+    const panelH = 130;
+    this.shopGraphics.fillStyle(0x000000, 0.7);
+    this.shopGraphics.fillRoundedRect(panelX, panelY, panelW, panelH, 6);
+    this.shopGraphics.lineStyle(1, 0xffd866, 0.5);
+    this.shopGraphics.strokeRoundedRect(panelX, panelY, panelW, panelH, 6);
+
+    this.shopTitle.setText(`TOWN                                            CASH $${this.player.cash}`);
+
+    for (let i = 0; i < this.shopActions.length; i++) {
+      const action = this.shopActions[i];
+      const text = this.shopActionTexts[i];
+      if (!action || !text) continue;
+      const built = action.buildLabel();
+      text.setText(built.text);
+      const color = built.maxed ? '#ffd866' : built.affordable ? '#aaffaa' : '#888888';
+      text.setColor(color);
+    }
+  }
+
   private updateHud(): void {
-    const fuelRatio = this.fuel / MAX_FUEL;
-    const cargoRatio = this.inventory.total() / this.inventory.capacity;
+    const fuelRatio = this.player.fuel / this.player.maxFuel;
+    const cargoRatio = this.player.inventory.total() / this.player.inventory.capacity;
     const fuelColor = fuelRatio < 0.2 ? 0xff5555 : fuelRatio < 0.5 ? 0xf5b342 : 0x55cc55;
-    const cargoColor = this.inventory.isFull() ? 0xff5555 : 0x6db8ff;
+    const cargoColor = this.player.inventory.isFull() ? 0xff5555 : 0x6db8ff;
 
     this.hudGraphics.clear();
     this.hudGraphics.fillStyle(0x000000, 0.55);
@@ -302,28 +502,28 @@ export class GameScene extends Phaser.Scene {
 
     const fuelPct = Math.round(fuelRatio * 100);
     this.fuelLabel.setText(`${fuelPct}%`);
-    this.cargoLabel.setText(`${this.inventory.total()}/${this.inventory.capacity}`);
+    this.cargoLabel.setText(`${this.player.inventory.total()}/${this.player.inventory.capacity}`);
 
     const depth = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
     this.depthLabel.setText(`DEPTH ${depth}m`);
-    this.valueLabel.setText(`$${this.inventory.totalValue()}`);
+    this.valueLabel.setText(`$${this.player.inventory.totalValue()}`);
 
     if (this.drillTarget && this.currentDrillTime > 0) {
       const pct = Math.round((this.drillProgress / this.currentDrillTime) * 100);
       const name = TILE_META[this.drillTarget.type].name;
       this.drillingLabel.setText(`drilling ${name} ${pct}%`);
-    } else if (this.inventory.isFull()) {
+    } else if (this.player.inventory.isFull()) {
       this.drillingLabel.setText('CARGO FULL');
     } else {
       this.drillingLabel.setText('');
     }
 
-    const entries = this.inventory.entries();
+    const entries = this.player.inventory.entries();
     this.inventoryTitle.setVisible(entries.length > 0);
     for (const line of this.inventoryLines.values()) line.setVisible(false);
     if (entries.length > 0) {
       this.hudGraphics.fillStyle(0x000000, 0.55);
-      this.hudGraphics.fillRoundedRect(1280 - 200, 8, 192, 28 + 18 * entries.length, 6);
+      this.hudGraphics.fillRoundedRect(GAME_WIDTH - 200, 8, 192, 28 + 18 * entries.length, 6);
       let lineY = 32;
       for (const [type, count] of entries) {
         const line = this.inventoryLines.get(type);

@@ -2,7 +2,7 @@ import { TILE_META } from './tiles';
 import { TileType } from './world';
 
 export class Inventory {
-  readonly capacity: number;
+  capacity: number;
   private counts: Map<TileType, number> = new Map();
 
   constructor(capacity: number) {
