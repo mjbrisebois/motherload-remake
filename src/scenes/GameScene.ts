@@ -51,7 +51,7 @@ export class GameScene extends Phaser.Scene {
       tileWidth: TILE_SIZE,
       tileHeight: TILE_SIZE,
     });
-    const tileset = map.addTilesetImage(TILESET_KEY, TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0);
+    const tileset = map.addTilesetImage(TILESET_KEY, TILESET_KEY, TILE_SIZE, TILE_SIZE, 0, 0, 1);
     if (!tileset) throw new Error('Failed to load tileset');
     const layer = map.createLayer(0, tileset, 0, 0);
     if (!layer) throw new Error('Failed to create tile layer');
@@ -131,17 +131,24 @@ export class GameScene extends Phaser.Scene {
     input: { left: boolean; right: boolean; down: boolean },
   ): void {
     const body = this.pod.body as Phaser.Physics.Arcade.Body;
+    const TOUCH = 2;
 
     let target: { col: number; row: number; dir: Direction } | null = null;
-    if (input.down && body.blocked.down) {
-      const t = this.tileBelowPod();
-      if (this.world.isSolid(t.col, t.row)) target = { ...t, dir: 'down' };
-    } else if (input.left && body.blocked.left) {
-      const t = this.tileLeftOfPod();
-      if (this.world.isSolid(t.col, t.row)) target = { ...t, dir: 'left' };
-    } else if (input.right && body.blocked.right) {
-      const t = this.tileRightOfPod();
-      if (this.world.isSolid(t.col, t.row)) target = { ...t, dir: 'right' };
+
+    if (input.down) {
+      const col = Math.floor(this.pod.x / TILE_SIZE);
+      const row = Math.floor((body.bottom + TOUCH) / TILE_SIZE);
+      if (this.world.isSolid(col, row)) target = { col, row, dir: 'down' };
+    }
+    if (!target && input.left) {
+      const col = Math.floor((body.left - TOUCH) / TILE_SIZE);
+      const row = Math.floor(this.pod.y / TILE_SIZE);
+      if (this.world.isSolid(col, row)) target = { col, row, dir: 'left' };
+    }
+    if (!target && input.right) {
+      const col = Math.floor((body.right + TOUCH) / TILE_SIZE);
+      const row = Math.floor(this.pod.y / TILE_SIZE);
+      if (this.world.isSolid(col, row)) target = { col, row, dir: 'right' };
     }
 
     if (!target) {
@@ -169,24 +176,6 @@ export class GameScene extends Phaser.Scene {
       this.drillProgress = 0;
       this.drillTarget = null;
     }
-  }
-
-  private tileBelowPod(): { col: number; row: number } {
-    const x = this.pod.x;
-    const y = this.pod.y + 16 + 1;
-    return { col: Math.floor(x / TILE_SIZE), row: Math.floor(y / TILE_SIZE) };
-  }
-
-  private tileLeftOfPod(): { col: number; row: number } {
-    const x = this.pod.x - 16 - 1;
-    const y = this.pod.y;
-    return { col: Math.floor(x / TILE_SIZE), row: Math.floor(y / TILE_SIZE) };
-  }
-
-  private tileRightOfPod(): { col: number; row: number } {
-    const x = this.pod.x + 16 + 1;
-    const y = this.pod.y;
-    return { col: Math.floor(x / TILE_SIZE), row: Math.floor(y / TILE_SIZE) };
   }
 
   private buildTileData(): number[][] {
