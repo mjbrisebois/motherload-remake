@@ -9,6 +9,7 @@ export enum TileType {
   PLATINUM = 7,
   RUBY = 8,
   DIAMOND = 9,
+  LAVA = 10,
 }
 
 export const ALL_SOLID_TYPES: readonly TileType[] = [
@@ -21,6 +22,7 @@ export const ALL_SOLID_TYPES: readonly TileType[] = [
   TileType.PLATINUM,
   TileType.RUBY,
   TileType.DIAMOND,
+  TileType.LAVA,
 ];
 
 export class World {

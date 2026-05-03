@@ -15,6 +15,9 @@ import {
   WORLD_SEED,
   GAME_WIDTH,
   GAME_HEIGHT,
+  FALL_DAMAGE_THRESHOLD,
+  FALL_DAMAGE_FACTOR,
+  LAVA_DAMAGE_PER_SEC,
 } from '../config';
 import { TileType, World } from '../game/world';
 import { generateWorld } from '../game/generator';
@@ -51,13 +54,18 @@ export class GameScene extends Phaser.Scene {
   private tileLayer!: Phaser.Tilemaps.TilemapLayer;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
-  private player = new PlayerState();
+  private player!: PlayerState;
   private drillTarget: { col: number; row: number; dir: Direction; type: TileType } | null = null;
   private drillProgress = 0;
   private currentDrillTime = 0;
 
+  private gameOver = false;
+  private wasGrounded = false;
+  private prevYVelocity = 0;
+
   private hudGraphics!: Phaser.GameObjects.Graphics;
   private fuelLabel!: Phaser.GameObjects.Text;
+  private hullLabel!: Phaser.GameObjects.Text;
   private cargoLabel!: Phaser.GameObjects.Text;
   private depthLabel!: Phaser.GameObjects.Text;
   private valueLabel!: Phaser.GameObjects.Text;
@@ -71,6 +79,12 @@ export class GameScene extends Phaser.Scene {
   private shopActionTexts: Phaser.GameObjects.Text[] = [];
   private shopActions: ShopAction[] = [];
   private hotkeys!: Phaser.Input.Keyboard.Key[];
+  private restartKey!: Phaser.Input.Keyboard.Key;
+
+  private gameOverGraphics!: Phaser.GameObjects.Graphics;
+  private gameOverTitle!: Phaser.GameObjects.Text;
+  private gameOverSubtitle!: Phaser.GameObjects.Text;
+  private gameOverHint!: Phaser.GameObjects.Text;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -81,6 +95,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.player = new PlayerState();
+    this.drillTarget = null;
+    this.drillProgress = 0;
+    this.currentDrillTime = 0;
+    this.gameOver = false;
+    this.wasGrounded = false;
+    this.prevYVelocity = 0;
+    this.inventoryLines = new Map();
+    this.shopActionTexts = [];
+    this.shopActions = [];
+
     this.world = generateWorld({
       cols: WORLD_COLS,
       rows: WORLD_ROWS,
@@ -98,7 +123,7 @@ export class GameScene extends Phaser.Scene {
     const layer = map.createLayer(0, tileset, 0, 0);
     if (!layer) throw new Error('Failed to create tile layer');
     this.tileLayer = layer;
-    this.tileLayer.setCollisionBetween(TileType.DIRT, TileType.DIAMOND);
+    this.tileLayer.setCollisionBetween(TileType.DIRT, TileType.LAVA);
 
     const worldPxW = WORLD_COLS * TILE_SIZE;
     const worldPxH = WORLD_ROWS * TILE_SIZE;
@@ -126,6 +151,7 @@ export class GameScene extends Phaser.Scene {
     this.createHud();
     this.buildShopActions();
     this.createShopUi();
+    this.createGameOverOverlay();
 
     const kc = Phaser.Input.Keyboard.KeyCodes;
     this.hotkeys = [
@@ -138,11 +164,22 @@ export class GameScene extends Phaser.Scene {
       this.input.keyboard!.addKey(kc.SEVEN),
       this.input.keyboard!.addKey(kc.EIGHT),
     ];
+    this.restartKey = this.input.keyboard!.addKey(kc.R);
   }
 
   override update(_time: number, deltaMs: number): void {
     const dt = Math.min(deltaMs / 1000, 0.05);
     const body = this.pod.body as Phaser.Physics.Arcade.Body;
+
+    if (this.gameOver) {
+      body.setVelocity(0, 0);
+      body.setAcceleration(0, 0);
+      if (Phaser.Input.Keyboard.JustDown(this.restartKey)) {
+        this.scene.restart();
+      }
+      return;
+    }
+
     const c = this.cursors;
     const left = c.left.isDown;
     const right = c.right.isDown;
@@ -174,9 +211,55 @@ export class GameScene extends Phaser.Scene {
 
     this.handleDrilling(dt, { left, right, down });
     this.handleShopInput();
+    this.handleFallDamage(body);
+    this.handleLavaDamage(body, dt);
+
+    if (this.player.isDead()) {
+      this.triggerGameOver();
+    }
 
     this.updateHud();
     this.updateShopUi();
+  }
+
+  private handleFallDamage(body: Phaser.Physics.Arcade.Body): void {
+    const grounded = body.blocked.down;
+    if (grounded && !this.wasGrounded && this.prevYVelocity > FALL_DAMAGE_THRESHOLD) {
+      const damage = (this.prevYVelocity - FALL_DAMAGE_THRESHOLD) * FALL_DAMAGE_FACTOR;
+      this.player.takeDamage(damage);
+    }
+    this.wasGrounded = grounded;
+    this.prevYVelocity = body.velocity.y;
+  }
+
+  private handleLavaDamage(body: Phaser.Physics.Arcade.Body, dt: number): void {
+    if (!this.isAdjacentToLava(body)) return;
+    this.player.takeDamage(LAVA_DAMAGE_PER_SEC * dt);
+  }
+
+  private isAdjacentToLava(body: Phaser.Physics.Arcade.Body): boolean {
+    const checks = [
+      { x: body.center.x, y: body.bottom + 1 },
+      { x: body.center.x, y: body.top - 1 },
+      { x: body.left - 1, y: body.center.y },
+      { x: body.right + 1, y: body.center.y },
+    ];
+    for (const p of checks) {
+      const col = Math.floor(p.x / TILE_SIZE);
+      const row = Math.floor(p.y / TILE_SIZE);
+      if (this.world.getTile(col, row) === TileType.LAVA) return true;
+    }
+    return false;
+  }
+
+  private triggerGameOver(): void {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    this.gameOverGraphics.setVisible(true);
+    this.gameOverTitle.setVisible(true);
+    this.gameOverSubtitle.setText(`final cash: $${this.player.cash}`);
+    this.gameOverSubtitle.setVisible(true);
+    this.gameOverHint.setVisible(true);
   }
 
   private isAtSurface(): boolean {
@@ -358,28 +441,35 @@ export class GameScene extends Phaser.Scene {
 
     this.hudGraphics = this.add.graphics().setScrollFactor(0).setDepth(1000);
 
-    this.add.text(20, 16, 'FUEL', titleStyle).setScrollFactor(0).setDepth(1001);
+    this.add.text(20, 14, 'FUEL', titleStyle).setScrollFactor(0).setDepth(1001);
     this.fuelLabel = this.add
-      .text(180, 16, '', labelStyle)
+      .text(180, 14, '', labelStyle)
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(1001);
 
-    this.add.text(20, 38, 'CARGO', titleStyle).setScrollFactor(0).setDepth(1001);
+    this.add.text(20, 36, 'HULL', titleStyle).setScrollFactor(0).setDepth(1001);
+    this.hullLabel = this.add
+      .text(180, 36, '', labelStyle)
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(1001);
+
+    this.add.text(20, 58, 'CARGO', titleStyle).setScrollFactor(0).setDepth(1001);
     this.cargoLabel = this.add
-      .text(180, 38, '', labelStyle)
+      .text(180, 58, '', labelStyle)
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(1001);
 
-    this.depthLabel = this.add.text(20, 64, '', labelStyle).setScrollFactor(0).setDepth(1001);
+    this.depthLabel = this.add.text(20, 84, '', labelStyle).setScrollFactor(0).setDepth(1001);
     this.valueLabel = this.add
-      .text(180, 64, '', labelStyle)
+      .text(180, 84, '', labelStyle)
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(1001);
 
-    this.drillingLabel = this.add.text(20, 84, '', labelStyle).setScrollFactor(0).setDepth(1001);
+    this.drillingLabel = this.add.text(20, 104, '', labelStyle).setScrollFactor(0).setDepth(1001);
 
     const invX = GAME_WIDTH - 200;
     this.inventoryTitle = this.add
@@ -490,18 +580,22 @@ export class GameScene extends Phaser.Scene {
 
   private updateHud(): void {
     const fuelRatio = this.player.fuel / this.player.maxFuel;
+    const hullRatio = this.player.hull / this.player.maxHull;
     const cargoRatio = this.player.inventory.total() / this.player.inventory.capacity;
     const fuelColor = fuelRatio < 0.2 ? 0xff5555 : fuelRatio < 0.5 ? 0xf5b342 : 0x55cc55;
+    const hullColor = hullRatio < 0.25 ? 0xff5555 : hullRatio < 0.6 ? 0xf5b342 : 0xff7766;
     const cargoColor = this.player.inventory.isFull() ? 0xff5555 : 0x6db8ff;
 
     this.hudGraphics.clear();
     this.hudGraphics.fillStyle(0x000000, 0.55);
-    this.hudGraphics.fillRoundedRect(8, 8, 200, 100, 6);
-    this.drawHudBar(20, 30, 160, 6, fuelRatio, fuelColor);
-    this.drawHudBar(20, 52, 160, 6, cargoRatio, cargoColor);
+    this.hudGraphics.fillRoundedRect(8, 8, 200, 122, 6);
+    this.drawHudBar(20, 28, 160, 6, fuelRatio, fuelColor);
+    this.drawHudBar(20, 50, 160, 6, hullRatio, hullColor);
+    this.drawHudBar(20, 72, 160, 6, cargoRatio, cargoColor);
 
     const fuelPct = Math.round(fuelRatio * 100);
     this.fuelLabel.setText(`${fuelPct}%`);
+    this.hullLabel.setText(`${Math.ceil(this.player.hull)}/${this.player.maxHull}`);
     this.cargoLabel.setText(`${this.player.inventory.total()}/${this.player.inventory.capacity}`);
 
     const depth = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
@@ -534,6 +628,49 @@ export class GameScene extends Phaser.Scene {
         lineY += 18;
       }
     }
+  }
+
+  private createGameOverOverlay(): void {
+    this.gameOverGraphics = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+    this.gameOverGraphics.fillStyle(0x000000, 0.78);
+    this.gameOverGraphics.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+    this.gameOverTitle = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50, 'GAME OVER', {
+        fontFamily: 'monospace',
+        fontSize: '64px',
+        color: '#ff5555',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2001)
+      .setVisible(false);
+
+    this.gameOverSubtitle = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, '', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: '#e8e8e8',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2001)
+      .setVisible(false);
+
+    this.gameOverHint = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 70, 'press R to restart', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#a0a0a0',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2001)
+      .setVisible(false);
   }
 
   private drawHudBar(

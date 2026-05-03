@@ -73,6 +73,24 @@ describe('PlayerState', () => {
     expect(p.buyUpgrade(UpgradeKind.FUEL_TANK)).toBe(false);
   });
 
+  it('takeDamage clamps to zero and isDead reflects state', () => {
+    const p = new PlayerState();
+    p.takeDamage(0);
+    expect(p.hull).toBe(p.maxHull);
+    p.takeDamage(10);
+    expect(p.hull).toBe(p.maxHull - 10);
+    expect(p.isDead()).toBe(false);
+    p.takeDamage(99999);
+    expect(p.hull).toBe(0);
+    expect(p.isDead()).toBe(true);
+  });
+
+  it('takeDamage ignores non-positive amounts', () => {
+    const p = new PlayerState();
+    p.takeDamage(-50);
+    expect(p.hull).toBe(p.maxHull);
+  });
+
   it('cargo upgrade increases inventory capacity without losing items', () => {
     const p = new PlayerState(99999999);
     p.inventory.tryAdd(TileType.GOLD);

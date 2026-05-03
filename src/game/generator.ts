@@ -23,6 +23,10 @@ const ROCK_PROB_SHALLOW = 0.0;
 const ROCK_PROB_DEEP = 0.06;
 const ROCK_RAMP_DEPTH = 80;
 
+const LAVA_MIN_DEPTH = 60;
+const LAVA_MAX_DEPTH = 200;
+const LAVA_PEAK_PROB = 0.045;
+
 function oreProb(rule: OreRule, depth: number): number {
   if (depth < rule.startDepth || depth >= rule.endDepth) return 0;
   if (depth <= rule.peakDepth) {
@@ -42,8 +46,16 @@ function rockProbAtDepth(depth: number): number {
   return ROCK_PROB_SHALLOW + (ROCK_PROB_DEEP - ROCK_PROB_SHALLOW) * t;
 }
 
+function lavaProbAtDepth(depth: number): number {
+  if (depth < LAVA_MIN_DEPTH || depth >= LAVA_MAX_DEPTH) return 0;
+  const span = LAVA_MAX_DEPTH - LAVA_MIN_DEPTH;
+  const t = (depth - LAVA_MIN_DEPTH) / span;
+  return LAVA_PEAK_PROB * t;
+}
+
 function pickTile(depth: number, rand: Rng): TileType {
   if (rand() < rockProbAtDepth(depth)) return TileType.ROCK;
+  if (rand() < lavaProbAtDepth(depth)) return TileType.LAVA;
   const roll = rand();
   let cum = 0;
   for (const rule of ORE_RULES) {

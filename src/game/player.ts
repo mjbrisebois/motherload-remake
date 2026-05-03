@@ -85,6 +85,15 @@ export class PlayerState {
     return this.upgradeLevel(kind) >= maxLevel(UPGRADE_TRACKS[kind]);
   }
 
+  takeDamage(amount: number): void {
+    if (amount <= 0) return;
+    this.hull = Math.max(0, this.hull - amount);
+  }
+
+  isDead(): boolean {
+    return this.hull <= 0;
+  }
+
   buyUpgrade(kind: UpgradeKind): boolean {
     const cost = this.upgradeCost(kind);
     if (cost === null) return false;

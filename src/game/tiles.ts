@@ -92,6 +92,14 @@ export const TILE_META: Record<TileType, TileMeta> = {
     drillTime: 1.2,
     hardness: 0,
   },
+  [TileType.LAVA]: {
+    name: 'lava',
+    baseColor: 0xff4500,
+    accentColor: 0xffd24a,
+    value: 0,
+    drillTime: 999,
+    hardness: 99,
+  },
 };
 
 export const RENDERED_TILE_TYPES: readonly TileType[] = [
@@ -104,6 +112,7 @@ export const RENDERED_TILE_TYPES: readonly TileType[] = [
   TileType.PLATINUM,
   TileType.RUBY,
   TileType.DIAMOND,
+  TileType.LAVA,
 ];
 
 export function isDrillable(type: TileType, drillLevel: number): boolean {
