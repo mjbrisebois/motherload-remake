@@ -17,4 +17,5 @@ export const FUEL_BURN_IDLE = 0.4;
 export const FUEL_BURN_THRUST = 3.0;
 export const FUEL_BURN_DRILL = 0.3;
 
-export const DRILL_TIME_DIRT = 0.4;
+export const WORLD_SEED = 1337;
+export const DRILL_LEVEL = 0;

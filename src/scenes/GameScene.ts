@@ -13,15 +13,24 @@ import {
   FUEL_BURN_IDLE,
   FUEL_BURN_THRUST,
   FUEL_BURN_DRILL,
-  DRILL_TIME_DIRT,
+  WORLD_SEED,
+  DRILL_LEVEL,
 } from '../config';
 import { TileType, World } from '../game/world';
+import { generateWorld } from '../game/generator';
+import { TILE_META, RENDERED_TILE_TYPES, isDrillable, type TileMeta } from '../game/tiles';
 
 const TILESET_KEY = 'tiles';
 const POD_KEY = 'pod';
-const DIRT_TILE_INDEX = 1;
 
 type Direction = 'down' | 'left' | 'right';
+
+function shiftColor(rgb: number, delta: number): number {
+  const r = Math.max(0, Math.min(255, ((rgb >> 16) & 0xff) + delta));
+  const g = Math.max(0, Math.min(255, ((rgb >> 8) & 0xff) + delta));
+  const b = Math.max(0, Math.min(255, (rgb & 0xff) + delta));
+  return (r << 16) | (g << 8) | b;
+}
 
 export class GameScene extends Phaser.Scene {
   private world!: World;
@@ -30,8 +39,9 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
   private fuel = MAX_FUEL;
-  private drillTarget: { col: number; row: number; dir: Direction } | null = null;
+  private drillTarget: { col: number; row: number; dir: Direction; type: TileType } | null = null;
   private drillProgress = 0;
+  private currentDrillTime = 0;
 
   private debugText!: Phaser.GameObjects.Text;
 
@@ -44,7 +54,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.world = new World(WORLD_COLS, WORLD_ROWS, SURFACE_ROW);
+    this.world = generateWorld({
+      cols: WORLD_COLS,
+      rows: WORLD_ROWS,
+      surfaceRow: SURFACE_ROW,
+      seed: WORLD_SEED,
+    });
 
     const map = this.make.tilemap({
       data: this.buildTileData(),
@@ -56,7 +71,7 @@ export class GameScene extends Phaser.Scene {
     const layer = map.createLayer(0, tileset, 0, 0);
     if (!layer) throw new Error('Failed to create tile layer');
     this.tileLayer = layer;
-    this.tileLayer.setCollision(DIRT_TILE_INDEX);
+    this.tileLayer.setCollisionBetween(TileType.DIRT, TileType.DIAMOND);
 
     const worldPxW = WORLD_COLS * TILE_SIZE;
     const worldPxH = WORLD_ROWS * TILE_SIZE;
@@ -133,48 +148,57 @@ export class GameScene extends Phaser.Scene {
     const body = this.pod.body as Phaser.Physics.Arcade.Body;
     const TOUCH = 2;
 
-    let target: { col: number; row: number; dir: Direction } | null = null;
+    let target: { col: number; row: number; dir: Direction; type: TileType } | null = null;
+
+    const tryTarget = (col: number, row: number, dir: Direction) => {
+      const type = this.world.getTile(col, row);
+      if (type !== TileType.EMPTY && isDrillable(type, DRILL_LEVEL)) {
+        target = { col, row, dir, type };
+      }
+    };
 
     if (input.down) {
       const col = Math.floor(this.pod.x / TILE_SIZE);
       const row = Math.floor((body.bottom + TOUCH) / TILE_SIZE);
-      if (this.world.isSolid(col, row)) target = { col, row, dir: 'down' };
+      tryTarget(col, row, 'down');
     }
     if (!target && input.left) {
       const col = Math.floor((body.left - TOUCH) / TILE_SIZE);
       const row = Math.floor(this.pod.y / TILE_SIZE);
-      if (this.world.isSolid(col, row)) target = { col, row, dir: 'left' };
+      tryTarget(col, row, 'left');
     }
     if (!target && input.right) {
       const col = Math.floor((body.right + TOUCH) / TILE_SIZE);
       const row = Math.floor(this.pod.y / TILE_SIZE);
-      if (this.world.isSolid(col, row)) target = { col, row, dir: 'right' };
+      tryTarget(col, row, 'right');
     }
 
     if (!target) {
       this.drillTarget = null;
       this.drillProgress = 0;
+      this.currentDrillTime = 0;
       return;
     }
 
+    const t: { col: number; row: number; dir: Direction; type: TileType } = target;
     const same =
-      this.drillTarget &&
-      this.drillTarget.col === target.col &&
-      this.drillTarget.row === target.row;
+      this.drillTarget && this.drillTarget.col === t.col && this.drillTarget.row === t.row;
     if (!same) {
-      this.drillTarget = target;
+      this.drillTarget = t;
       this.drillProgress = 0;
+      this.currentDrillTime = TILE_META[t.type].drillTime;
     }
 
     if (this.fuel <= 0) return;
 
     this.drillProgress += dt;
-    if (this.drillProgress >= DRILL_TIME_DIRT) {
-      this.world.setTile(target.col, target.row, TileType.EMPTY);
-      this.tileLayer.removeTileAt(target.col, target.row);
+    if (this.drillProgress >= this.currentDrillTime) {
+      this.world.setTile(t.col, t.row, TileType.EMPTY);
+      this.tileLayer.removeTileAt(t.col, t.row);
       this.fuel = Math.max(0, this.fuel - FUEL_BURN_DRILL);
       this.drillProgress = 0;
       this.drillTarget = null;
+      this.currentDrillTime = 0;
     }
   }
 
@@ -183,7 +207,7 @@ export class GameScene extends Phaser.Scene {
     for (let r = 0; r < this.world.rows; r++) {
       const row: number[] = [];
       for (let c = 0; c < this.world.cols; c++) {
-        row.push(this.world.getTile(c, r) === TileType.DIRT ? DIRT_TILE_INDEX : 0);
+        row.push(this.world.getTile(c, r));
       }
       result.push(row);
     }
@@ -193,34 +217,30 @@ export class GameScene extends Phaser.Scene {
   private updateDebugText(): void {
     const depth = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
     const fuelPct = Math.round((this.fuel / MAX_FUEL) * 100);
-    const drillPct = this.drillTarget
-      ? Math.round((this.drillProgress / DRILL_TIME_DIRT) * 100)
-      : 0;
+    const drillPct =
+      this.drillTarget && this.currentDrillTime > 0
+        ? Math.round((this.drillProgress / this.currentDrillTime) * 100)
+        : 0;
+    const drillingName = this.drillTarget ? TILE_META[this.drillTarget.type].name : '—';
     this.debugText.setText(
       [
         `fuel: ${fuelPct}%`,
         `depth: ${depth}m`,
-        `drill: ${drillPct}%`,
-        `pos: ${Math.round(this.pod.x)}, ${Math.round(this.pod.y)}`,
+        `drilling: ${drillingName} (${drillPct}%)`,
       ].join('  |  '),
     );
   }
 
   private generatePlaceholderTextures(): void {
-    const dirt = this.add.graphics({ x: 0, y: 0 });
-    dirt.fillStyle(0x6b4423, 1);
-    dirt.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
-    dirt.fillStyle(0x4f3219, 1);
-    dirt.fillRect(0, 0, TILE_SIZE, 2);
-    dirt.fillRect(0, TILE_SIZE - 2, TILE_SIZE, 2);
-    dirt.fillRect(0, 0, 2, TILE_SIZE);
-    dirt.fillRect(TILE_SIZE - 2, 0, 2, TILE_SIZE);
-    dirt.fillStyle(0x8a5a30, 1);
-    dirt.fillRect(8, 6, 3, 3);
-    dirt.fillRect(20, 14, 2, 2);
-    dirt.fillRect(12, 22, 3, 3);
-    dirt.generateTexture(TILESET_KEY, TILE_SIZE, TILE_SIZE);
-    dirt.destroy();
+    const stripWidth = RENDERED_TILE_TYPES.length * TILE_SIZE;
+    const g = this.add.graphics({ x: 0, y: 0 });
+    for (let i = 0; i < RENDERED_TILE_TYPES.length; i++) {
+      const type = RENDERED_TILE_TYPES[i];
+      if (type === undefined) continue;
+      this.drawTileToStrip(g, i * TILE_SIZE, 0, TILE_META[type]);
+    }
+    g.generateTexture(TILESET_KEY, stripWidth, TILE_SIZE);
+    g.destroy();
 
     const pod = this.add.graphics({ x: 0, y: 0 });
     pod.fillStyle(0xf5d142, 1);
@@ -233,5 +253,36 @@ export class GameScene extends Phaser.Scene {
     pod.strokeRect(2, 2, 28, 22);
     pod.generateTexture(POD_KEY, 32, 32);
     pod.destroy();
+  }
+
+  private drawTileToStrip(
+    g: Phaser.GameObjects.Graphics,
+    x: number,
+    y: number,
+    meta: TileMeta,
+  ): void {
+    const dark = shiftColor(meta.baseColor, -50);
+    const light = shiftColor(meta.baseColor, 25);
+
+    g.fillStyle(meta.baseColor, 1);
+    g.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+
+    g.fillStyle(dark, 1);
+    g.fillRect(x, y, TILE_SIZE, 2);
+    g.fillRect(x, y + TILE_SIZE - 2, TILE_SIZE, 2);
+    g.fillRect(x, y, 2, TILE_SIZE);
+    g.fillRect(x + TILE_SIZE - 2, y, 2, TILE_SIZE);
+
+    g.fillStyle(light, 1);
+    g.fillRect(x + 7, y + 6, 2, 2);
+    g.fillRect(x + 21, y + 13, 2, 2);
+    g.fillRect(x + 13, y + 23, 2, 2);
+
+    if (meta.accentColor !== null) {
+      g.fillStyle(meta.accentColor, 1);
+      g.fillCircle(x + 10, y + 10, 3);
+      g.fillCircle(x + 22, y + 17, 2.5);
+      g.fillCircle(x + 14, y + 24, 2.5);
+    }
   }
 }

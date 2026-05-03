@@ -1,7 +1,27 @@
 export enum TileType {
   EMPTY = 0,
   DIRT = 1,
+  ROCK = 2,
+  COPPER = 3,
+  IRON = 4,
+  SILVER = 5,
+  GOLD = 6,
+  PLATINUM = 7,
+  RUBY = 8,
+  DIAMOND = 9,
 }
+
+export const ALL_SOLID_TYPES: readonly TileType[] = [
+  TileType.DIRT,
+  TileType.ROCK,
+  TileType.COPPER,
+  TileType.IRON,
+  TileType.SILVER,
+  TileType.GOLD,
+  TileType.PLATINUM,
+  TileType.RUBY,
+  TileType.DIAMOND,
+];
 
 export class World {
   readonly cols: number;
@@ -20,12 +40,6 @@ export class World {
     this.rows = rows;
     this.surfaceRow = surfaceRow;
     this.tiles = new Uint8Array(cols * rows);
-
-    for (let r = surfaceRow; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        this.tiles[r * cols + c] = TileType.DIRT;
-      }
-    }
   }
 
   inBounds(col: number, row: number): boolean {
