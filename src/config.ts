@@ -6,8 +6,10 @@ export const WORLD_COLS = 50;
 export const WORLD_ROWS = 200;
 export const SURFACE_ROW = 8;
 
-export const HORIZ_SPEED = 200;
-export const THRUST_ACCEL = 900;
+export const HORIZ_SPEED = 500;
+export const GROUND_HORIZ_SPEED = 200;
+export const HORIZ_ACCEL = 1200;
+export const THRUST_ACCEL = 1400;
 export const GRAVITY = 600;
 export const MAX_FALL_SPEED = 600;
 export const HORIZ_DRAG = 600;
@@ -23,3 +25,7 @@ export const FALL_DAMAGE_FACTOR = 0.18;
 export const LAVA_DAMAGE_PER_SEC = 35;
 
 export const DRILL_INTENT_HOLD = 0.36;
+
+export const CARGO_THRUST_PENALTY = 200;
+export const MAGNET_PULL_SPEED = 80;
+export const MAGNET_VY_THRESHOLD = 30;

@@ -5,6 +5,8 @@ import {
   WORLD_ROWS,
   SURFACE_ROW,
   HORIZ_SPEED,
+  GROUND_HORIZ_SPEED,
+  HORIZ_ACCEL,
   THRUST_ACCEL,
   GRAVITY,
   MAX_FALL_SPEED,
@@ -19,6 +21,9 @@ import {
   FALL_DAMAGE_FACTOR,
   LAVA_DAMAGE_PER_SEC,
   DRILL_INTENT_HOLD,
+  CARGO_THRUST_PENALTY,
+  MAGNET_PULL_SPEED,
+  MAGNET_VY_THRESHOLD,
 } from '../config';
 import { TileType, World } from '../game/world';
 import { generateWorld } from '../game/generator';
@@ -149,7 +154,7 @@ export class GameScene extends Phaser.Scene {
     this.pod.setDragX(HORIZ_DRAG);
     const body = this.pod.body as Phaser.Physics.Arcade.Body;
     body.setGravityY(GRAVITY);
-    body.setSize(28, 28);
+    body.setSize(24, 28);
 
     this.physics.add.collider(this.pod, this.tileLayer);
 
@@ -207,18 +212,23 @@ export class GameScene extends Phaser.Scene {
       const up = c.up.isDown;
       const down = c.down.isDown;
 
-      const horizSpeed = HORIZ_SPEED * this.player.engineMultiplier;
-      const thrust = THRUST_ACCEL * this.player.engineMultiplier;
-      body.setMaxVelocity(horizSpeed, MAX_FALL_SPEED);
+      const cargoLoad =
+        this.player.inventory.capacity > 0
+          ? this.player.inventory.total() / this.player.inventory.capacity
+          : 0;
+      const baseThrust = THRUST_ACCEL * this.player.engineMultiplier;
+      const thrust = Math.max(0, baseThrust - CARGO_THRUST_PENALTY * cargoLoad);
+      const maxHoriz = this.isGrounded(body) ? GROUND_HORIZ_SPEED : HORIZ_SPEED;
+      body.setMaxVelocity(maxHoriz, MAX_FALL_SPEED);
 
       const fuelEmpty = this.player.fuel <= 0;
 
       if (left && !right) {
-        body.setAccelerationX(0);
-        body.setVelocityX(-horizSpeed);
+        body.setAccelerationX(-HORIZ_ACCEL);
       } else if (right && !left) {
+        body.setAccelerationX(HORIZ_ACCEL);
+      } else {
         body.setAccelerationX(0);
-        body.setVelocityX(horizSpeed);
       }
 
       if (up && !fuelEmpty) {
@@ -230,6 +240,7 @@ export class GameScene extends Phaser.Scene {
 
       this.player.fuel = Math.max(0, this.player.fuel - FUEL_BURN_IDLE * dt);
 
+      this.applyVerticalMagnet(body, left, right, dt);
       this.handleFallDamage(body);
       this.tryStartDrill({ left, right, down });
       this.handleShopInput();
@@ -245,6 +256,35 @@ export class GameScene extends Phaser.Scene {
 
     this.updateHud();
     this.updateShopUi();
+  }
+
+  private applyVerticalMagnet(
+    body: Phaser.Physics.Arcade.Body,
+    left: boolean,
+    right: boolean,
+    dt: number,
+  ): void {
+    if (left || right) return;
+    const vy = body.velocity.y;
+    if (Math.abs(vy) < MAGNET_VY_THRESHOLD) return;
+
+    const col = Math.floor(this.pod.x / TILE_SIZE);
+    const checkRow =
+      vy > 0
+        ? Math.floor((body.bottom + 4) / TILE_SIZE)
+        : Math.floor((body.top - 4) / TILE_SIZE);
+    if (this.world.isSolid(col, checkRow)) return;
+
+    const targetX = col * TILE_SIZE + TILE_SIZE / 2;
+    const dx = targetX - this.pod.x;
+    if (Math.abs(dx) < 0.3) return;
+
+    const maxNudge = MAGNET_PULL_SPEED * dt;
+    if (Math.abs(dx) <= maxNudge) {
+      this.pod.x = targetX;
+    } else {
+      this.pod.x += Math.sign(dx) * maxNudge;
+    }
   }
 
   private handleFallDamage(body: Phaser.Physics.Arcade.Body): void {
