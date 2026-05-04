@@ -10,21 +10,24 @@ interface OreRule {
 }
 
 const ORE_RULES: readonly OreRule[] = [
-  { type: TileType.COPPER, startDepth: 0, peakDepth: 6, endDepth: 35, peakProb: 0.14 },
-  { type: TileType.IRON, startDepth: 6, peakDepth: 25, endDepth: 70, peakProb: 0.12 },
-  { type: TileType.SILVER, startDepth: 25, peakDepth: 55, endDepth: 110, peakProb: 0.09 },
-  { type: TileType.GOLD, startDepth: 55, peakDepth: 90, endDepth: 160, peakProb: 0.07 },
-  { type: TileType.PLATINUM, startDepth: 95, peakDepth: 140, endDepth: 200, peakProb: 0.05 },
-  { type: TileType.RUBY, startDepth: 130, peakDepth: 175, endDepth: 220, peakProb: 0.04 },
-  { type: TileType.DIAMOND, startDepth: 160, peakDepth: 200, endDepth: 220, peakProb: 0.03 },
+  { type: TileType.IRONIUM, startDepth: 0, peakDepth: 12, endDepth: 60, peakProb: 0.14 },
+  { type: TileType.BRONZIUM, startDepth: 0, peakDepth: 60, endDepth: 130, peakProb: 0.12 },
+  { type: TileType.SILVERIUM, startDepth: 20, peakDepth: 130, endDepth: 220, peakProb: 0.09 },
+  { type: TileType.GOLDIUM, startDepth: 90, peakDepth: 200, endDepth: 300, peakProb: 0.07 },
+  { type: TileType.PLATINIUM, startDepth: 170, peakDepth: 270, endDepth: 360, peakProb: 0.06 },
+  { type: TileType.EINSTEINIUM, startDepth: 240, peakDepth: 330, endDepth: 410, peakProb: 0.05 },
+  { type: TileType.RUBY, startDepth: 290, peakDepth: 370, endDepth: 440, peakProb: 0.045 },
+  { type: TileType.EMERALD, startDepth: 340, peakDepth: 410, endDepth: 470, peakProb: 0.04 },
+  { type: TileType.DIAMOND, startDepth: 380, peakDepth: 445, endDepth: 490, peakProb: 0.035 },
+  { type: TileType.AMAZONITE, startDepth: 420, peakDepth: 470, endDepth: 495, peakProb: 0.025 },
 ];
 
 const ROCK_PROB_SHALLOW = 0.0;
 const ROCK_PROB_DEEP = 0.06;
-const ROCK_RAMP_DEPTH = 80;
+const ROCK_RAMP_DEPTH = 350;
 
-const LAVA_MIN_DEPTH = 60;
-const LAVA_MAX_DEPTH = 200;
+const LAVA_MIN_DEPTH = 250;
+const LAVA_MAX_DEPTH = 490;
 const LAVA_PEAK_PROB = 0.045;
 
 function oreProb(rule: OreRule, depth: number): number {

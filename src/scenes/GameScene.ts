@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
   TILE_SIZE,
+  METERS_PER_TILE,
   WORLD_COLS,
   WORLD_ROWS,
   SURFACE_ROW,
@@ -717,8 +718,8 @@ export class GameScene extends Phaser.Scene {
     this.hullLabel.setText(`${Math.ceil(this.player.hull)}/${this.player.maxHull}`);
     this.cargoLabel.setText(`${this.player.inventory.total()}/${this.player.inventory.capacity}`);
 
-    const depth = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
-    this.depthLabel.setText(`DEPTH ${depth}m`);
+    const depthTiles = Math.max(0, Math.floor(this.pod.y / TILE_SIZE) - SURFACE_ROW);
+    this.depthLabel.setText(`DEPTH ${depthTiles * METERS_PER_TILE}m`);
     this.valueLabel.setText(`$${this.player.inventory.totalValue()}`);
 
     if (this.drillTarget && this.currentDrillTime > 0) {

@@ -34,8 +34,8 @@ describe('World', () => {
     expect(w.isSolid(0, 2)).toBe(false);
     w.setTile(0, 2, TileType.DIRT);
     expect(w.isSolid(0, 2)).toBe(true);
-    w.setTile(0, 2, TileType.GOLD);
-    expect(w.getTile(0, 2)).toBe(TileType.GOLD);
+    w.setTile(0, 2, TileType.GOLDIUM);
+    expect(w.getTile(0, 2)).toBe(TileType.GOLDIUM);
     expect(w.isSolid(0, 2)).toBe(true);
     w.setTile(0, 2, TileType.EMPTY);
     expect(w.isSolid(0, 2)).toBe(false);

@@ -25,9 +25,9 @@ describe('PlayerState', () => {
 
   it('sellAll empties inventory and adds value to cash', () => {
     const p = new PlayerState(50);
-    p.inventory.tryAdd(TileType.GOLD);
-    p.inventory.tryAdd(TileType.COPPER);
-    const expected = TILE_META[TileType.GOLD].value + TILE_META[TileType.COPPER].value;
+    p.inventory.tryAdd(TileType.GOLDIUM);
+    p.inventory.tryAdd(TileType.IRONIUM);
+    const expected = TILE_META[TileType.GOLDIUM].value + TILE_META[TileType.IRONIUM].value;
     expect(p.sellAll()).toBe(expected);
     expect(p.cash).toBe(50 + expected);
     expect(p.inventory.total()).toBe(0);
@@ -115,10 +115,10 @@ describe('PlayerState', () => {
 
   it('cargo upgrade increases inventory capacity without losing items', () => {
     const p = new PlayerState(99999999);
-    p.inventory.tryAdd(TileType.GOLD);
+    p.inventory.tryAdd(TileType.GOLDIUM);
     const before = p.inventory.capacity;
     expect(p.buyUpgrade(UpgradeKind.CARGO_BAY)).toBe(true);
     expect(p.inventory.capacity).toBeGreaterThan(before);
-    expect(p.inventory.count(TileType.GOLD)).toBe(1);
+    expect(p.inventory.count(TileType.GOLDIUM)).toBe(1);
   });
 });

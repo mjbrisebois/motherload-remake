@@ -1,9 +1,10 @@
 export const GAME_WIDTH = 1280;
 export const GAME_HEIGHT = 720;
 export const TILE_SIZE = 32;
+export const METERS_PER_TILE = 5;
 
 export const WORLD_COLS = 50;
-export const WORLD_ROWS = 200;
+export const WORLD_ROWS = 500;
 export const SURFACE_ROW = 8;
 
 export const HORIZ_SPEED = 500;
